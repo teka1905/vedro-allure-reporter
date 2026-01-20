@@ -286,6 +286,8 @@ class AllureReporterPlugin(Reporter):
 
         :param event: The ScenarioReported event containing scenario results.
         """
+        self._attach_late_step_artifacts(event)
+
         aggregated_result = event.aggregated_result
         if self._report_rescheduled_scenarios:
             for scenario_result in aggregated_result.scenario_results:
@@ -558,6 +560,68 @@ class AllureReporterPlugin(Reporter):
             return traceback
         else:
             return TracebackFilter(modules=[vedro]).filter_tb(traceback)
+
+    def _attach_late_step_artifacts(self, event: ScenarioReportedEvent) -> None:
+        """
+        Attach artifacts to Allure steps that were added after step completion.
+
+        Some plugins (e.g., vedro-pw) attach artifacts to step_results after steps
+        have been completed and reported. This method processes those artifacts
+        before the test is finalized.
+
+        :param event: The ScenarioReported event containing scenario results.
+        """
+        if not self._current_test_uuid:
+            return
+
+        # Get the test result object while it's still in memory (before close_test)
+        test_result = self._allure_commons_reporter.get_test(self._current_test_uuid)  # type: ignore
+        if not test_result:
+            return
+
+        aggregated_result = event.aggregated_result
+        if self._report_rescheduled_scenarios:
+            scenario_results = aggregated_result.scenario_results
+        else:
+            scenario_results = [aggregated_result]
+
+        for scenario_result in scenario_results:
+            self._process_late_step_artifacts(test_result, scenario_result)
+
+    def _process_late_step_artifacts(self, test_result, scenario_result: ScenarioResult) -> None:
+        """
+        Process artifacts from step_results and attach them to corresponding Allure steps.
+
+        :param test_result: The Allure test result object.
+        :param scenario_result: The scenario result containing step results with artifacts.
+        """
+        allure_steps_by_name = {step.name: step for step in test_result.steps}
+
+        for step_result in scenario_result.step_results:
+            if not step_result.artifacts:
+                continue
+
+            allure_step_name = step_result.step_name.replace("_", " ")
+            allure_step = allure_steps_by_name.get(allure_step_name)
+
+            if not allure_step:
+                continue
+
+            # Attach artifacts that aren't already attached (avoid duplicates)
+            for artifact in step_result.artifacts:
+                artifact_name = artifact.name
+
+                if any(att.name == artifact_name for att in allure_step.attachments):
+                    continue
+
+                if isinstance(artifact, MemoryArtifact):
+                    attachment = self._add_memory_attachment(artifact)
+                elif isinstance(artifact, FileArtifact):
+                    attachment = self._add_file_attachment(artifact)
+                else:
+                    continue
+
+                allure_step.attachments.append(attachment)
 
     def _get_uuid4(self) -> str:
         """
