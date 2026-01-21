@@ -574,8 +574,9 @@ class AllureReporterPlugin(Reporter):
         if not self._current_test_uuid:
             return
 
-        # Get the test result object while it's still in memory (before close_test)
-        test_result = self._allure_commons_reporter.get_test(self._current_test_uuid)  # type: ignore
+        test_result = self._allure_commons_reporter.get_test(  # type: ignore
+            self._current_test_uuid
+        )
         if not test_result:
             return
 
@@ -585,18 +586,22 @@ class AllureReporterPlugin(Reporter):
         else:
             scenario_results = [aggregated_result]
 
-        for scenario_result in scenario_results:
-            self._process_late_step_artifacts(test_result, scenario_result)
+        allure_steps_by_name = {step.name: step for step in test_result.steps}
 
-    def _process_late_step_artifacts(self, test_result, scenario_result: ScenarioResult) -> None:
+        for scenario_result in scenario_results:
+            self._process_late_step_artifacts(scenario_result, allure_steps_by_name)
+
+    def _process_late_step_artifacts(
+        self,
+        scenario_result: ScenarioResult,
+        allure_steps_by_name: Dict[str, Any],
+    ) -> None:
         """
         Process artifacts from step_results and attach them to corresponding Allure steps.
 
-        :param test_result: The Allure test result object.
         :param scenario_result: The scenario result containing step results with artifacts.
+        :param allure_steps_by_name: Dictionary mapping step names to Allure step objects.
         """
-        allure_steps_by_name = {step.name: step for step in test_result.steps}
-
         for step_result in scenario_result.step_results:
             if not step_result.artifacts:
                 continue
@@ -607,21 +612,25 @@ class AllureReporterPlugin(Reporter):
             if not allure_step:
                 continue
 
-            # Attach artifacts that aren't already attached (avoid duplicates)
-            for artifact in step_result.artifacts:
-                artifact_name = artifact.name
+            existing_attachment_names = {
+                att.name for att in allure_step.attachments
+            }
 
-                if any(att.name == artifact_name for att in allure_step.attachments):
+            for artifact in step_result.artifacts:
+                if not isinstance(artifact, (MemoryArtifact, FileArtifact)):
+                    continue
+
+                artifact_name = artifact.name
+                if artifact_name in existing_attachment_names:
                     continue
 
                 if isinstance(artifact, MemoryArtifact):
                     attachment = self._add_memory_attachment(artifact)
-                elif isinstance(artifact, FileArtifact):
-                    attachment = self._add_file_attachment(artifact)
                 else:
-                    continue
+                    attachment = self._add_file_attachment(artifact)
 
                 allure_step.attachments.append(attachment)
+                existing_attachment_names.add(artifact_name)
 
     def _get_uuid4(self) -> str:
         """
